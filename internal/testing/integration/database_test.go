@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/database"
 	"github.com/pressly/goose/v3/internal/testing/testdb"
 	"github.com/stretchr/testify/require"
@@ -18,6 +19,17 @@ func TestPostgres(t *testing.T) {
 	require.NoError(t, db.Ping())
 
 	testDatabase(t, database.DialectPostgres, db, "testdata/migrations/postgres")
+}
+
+func TestSpanner(t *testing.T) {
+	t.Parallel()
+
+	db, cleanup, err := testdb.NewSpanner()
+	require.NoError(t, err)
+	t.Cleanup(cleanup)
+	require.NoError(t, db.Ping())
+
+	testDatabase(t, database.DialectSpanner, db, "testdata/migrations/spanner", goose.WithIsolateDDL(true))
 }
 
 func TestClickhouse(t *testing.T) {
@@ -124,12 +136,12 @@ func TestYDB(t *testing.T) {
 func TestStarrocks(t *testing.T) {
 	t.Parallel()
 
-	t.Skip("Starrocks is flaky on CI, see https://github.com/pressly/goose/issues/881")
+	// t.Skip("Starrocks is flaky on CI, see https://github.com/pressly/goose/issues/881")
 
 	db, cleanup, err := testdb.NewStarrocks()
 	require.NoError(t, err)
 	t.Cleanup(cleanup)
 	require.NoError(t, db.Ping())
 
-	testDatabase(t, database.DialectStarrocks, db, "testdata/migrations/starrocks")
+	testDatabase(t, database.DialectStarrocks, db, "testdata/migrations/starrocks", goose.WithIsolateDDL(true))
 }

@@ -16,8 +16,8 @@ Manage your **database schema** by creating incremental SQL changes or Go functi
 #### Features
 
 - Works against multiple databases:
-  - Postgres, MySQL, SQLite, YDB, ClickHouse, MSSQL, and
-    more.
+  - Postgres, MySQL, MariaDB, Spanner, SQLite,
+    YDB, ClickHouse, MSSQL, Vertica, and more.
 - Supports Go migrations written as plain functions.
 - Supports [embedded](https://pkg.go.dev/embed/) migrations.
 - Out-of-order migrations.
@@ -87,7 +87,7 @@ docker build --build-arg GOOSE_BUILD_TAGS="no_mysql no_postgres" -t goose:lite .
 <summary>Click to show <code>goose help</code> output</summary>
 
 ```
-Usage: goose [OPTIONS] DRIVER DBSTRING COMMAND
+Usage: goose DRIVER DBSTRING [OPTIONS] COMMAND
 
 or
 
@@ -102,12 +102,14 @@ Drivers:
     postgres
     mysql
     sqlite3
+    spanner
     mssql
     redshift
     tidb
     clickhouse
     ydb
     starrocks
+    turso
 
 Examples:
     goose sqlite3 ./foo.db status
@@ -118,6 +120,7 @@ Examples:
 
     goose postgres "user=postgres dbname=postgres sslmode=disable" status
     goose mysql "user:password@/dbname?parseTime=true" status
+    goose spanner "projects/project/instances/instance/databases/database" status
     goose redshift "postgres://user:password@qwerty.us-east-1.redshift.amazonaws.com:5439/db" status
     goose tidb "user:password@/dbname?parseTime=true" status
     goose mssql "sqlserver://user:password@hostname:1433?database=master" status
@@ -249,9 +252,9 @@ Print the status of all migrations:
     $   Sun Jan  6 11:25:03 2013 -- 002_next.sql
     $   Pending                  -- 003_and_again.go
 
-Note: for MySQL [parseTime flag](https://github.com/go-sql-driver/mysql#parsetime) must be enabled.
+Note: for MySQL and MariaDB (use the `mysql` driver) [parseTime flag](https://github.com/go-sql-driver/mysql#parsetime) must be enabled.
 
-Note: for MySQL
+Note: for MySQL and MariaDB
 [`multiStatements`](https://github.com/go-sql-driver/mysql?tab=readme-ov-file#multistatements) must
 be enabled. This is required when writing multiple queries separated by ';' characters in a single
 sql file.
@@ -369,7 +372,7 @@ You can use these annotations multiple times within a file.
 This feature is disabled by default for backward compatibility with existing scripts.
 
 For `PL/pgSQL` functions or other statements where substitution is not desired, wrap the annotations
-explicitly around the relevant parts. For example, to exclude escaping the `**` characters:
+explicitly around the relevant parts. For example, to exclude escaping the `$$` characters:
 
 ```sql
 -- +goose StatementBegin
