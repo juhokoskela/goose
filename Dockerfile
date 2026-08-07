@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1.8
 
-FROM --platform=$BUILDPLATFORM golang:1.26.5 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine AS builder
 
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 ARG GOOSE_BUILD_TAGS=""
 
 ENV CGO_ENABLED=0 \
