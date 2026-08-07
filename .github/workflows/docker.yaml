@@ -131,6 +131,7 @@ jobs:
           context: ./upstream
           platforms: linux/amd64,linux/arm64
           push: true
+          build-args: GOOSE_VERSION=${{ steps.release.outputs.tag }}
           tags: |
             ${{ env.IMAGE_NAME }}:${{ steps.release.outputs.tag }}
             ${{ env.IMAGE_NAME }}:latest
