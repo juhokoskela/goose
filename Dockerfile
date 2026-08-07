@@ -1,10 +1,11 @@
 # syntax=docker/dockerfile:1.8
 
-FROM --platform=$BUILDPLATFORM golang:1.26.5 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine AS builder
 
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 ARG GOOSE_BUILD_TAGS=""
+ARG GOOSE_VERSION=""
 
 ENV CGO_ENABLED=0 \
     GOOSE_BUILD_TAGS=${GOOSE_BUILD_TAGS}
@@ -20,10 +21,14 @@ COPY . .
 
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH /bin/sh -c '\
     set -e; \
+    ldflags="-s -w"; \
+    if [ -n "$GOOSE_VERSION" ]; then \
+      ldflags="$ldflags -X main.version=$GOOSE_VERSION"; \
+    fi; \
     if [ -n "$GOOSE_BUILD_TAGS" ]; then \
-      go build -trimpath -tags "$GOOSE_BUILD_TAGS" -ldflags "-s -w" -o /out/goose ./cmd/goose; \
+      go build -trimpath -tags "$GOOSE_BUILD_TAGS" -ldflags "$ldflags" -o /out/goose ./cmd/goose; \
     else \
-      go build -trimpath -ldflags "-s -w" -o /out/goose ./cmd/goose; \
+      go build -trimpath -ldflags "$ldflags" -o /out/goose ./cmd/goose; \
     fi'
 
 FROM gcr.io/distroless/static-debian12:nonroot
