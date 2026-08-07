@@ -93,19 +93,41 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - name: Check for an existing release image
+      - name: Check for a complete release image
         id: published
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
-          if docker buildx imagetools inspect "$IMAGE_NAME:$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
+          release_manifest=""
+          latest_manifest=""
+
+          if release_manifest="$(docker buildx imagetools inspect "$IMAGE_NAME:$RELEASE_TAG" --format '{{json .Manifest}}' 2>/dev/null)" &&
+             latest_manifest="$(docker buildx imagetools inspect "$IMAGE_NAME:latest" --format '{{json .Manifest}}' 2>/dev/null)"; then
+            release_platforms="$(jq -cS '
+              [.manifests[]?
+                | select(.platform.os == "linux")
+                | select(.platform.architecture == "amd64" or .platform.architecture == "arm64")
+                | {architecture: .platform.architecture, digest: .digest}]
+              | sort_by(.architecture)
+            ' <<< "$release_manifest")"
+            latest_platforms="$(jq -cS '
+              [.manifests[]?
+                | select(.platform.os == "linux")
+                | select(.platform.architecture == "amd64" or .platform.architecture == "arm64")
+                | {architecture: .platform.architecture, digest: .digest}]
+              | sort_by(.architecture)
+            ' <<< "$latest_manifest")"
+          fi
+
+          if jq -e 'map(.architecture) == ["amd64", "arm64"]' <<< "${release_platforms:-[]}" >/dev/null &&
+             [ "$release_platforms" = "$latest_platforms" ]; then
+            echo "complete=true" >> "$GITHUB_OUTPUT"
           else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "complete=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Checkout latest upstream release
-        if: steps.published.outputs.exists != 'true' || inputs.force
+        if: steps.published.outputs.complete != 'true' || inputs.force
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: pressly/goose
@@ -114,11 +136,11 @@ jobs:
           persist-credentials: false
 
       - name: Add Docker scaffolding
-        if: steps.published.outputs.exists != 'true' || inputs.force
+        if: steps.published.outputs.complete != 'true' || inputs.force
         run: cp Dockerfile .dockerignore upstream/
 
       - name: Build and push latest upstream release
-        if: steps.published.outputs.exists != 'true' || inputs.force
+        if: steps.published.outputs.complete != 'true' || inputs.force
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: ./upstream
@@ -130,8 +152,8 @@ jobs:
           cache-from: type=gha,scope=goose-stable
           cache-to: type=gha,mode=max,scope=goose-stable
 
-      - name: Report existing release image
-        if: steps.published.outputs.exists == 'true' && !inputs.force
+      - name: Report complete release image
+        if: steps.published.outputs.complete == 'true' && !inputs.force
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
-        run: echo "$IMAGE_NAME:$RELEASE_TAG is already published" >> "$GITHUB_STEP_SUMMARY"
+        run: echo "$IMAGE_NAME:$RELEASE_TAG and latest contain both required platforms" >> "$GITHUB_STEP_SUMMARY"
