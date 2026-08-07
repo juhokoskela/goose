@@ -1,15 +1,12 @@
 name: Publish Docker images
 
 on:
-  push:
-    branches:
-      - main
   schedule:
     - cron: "17 6 * * *"
   workflow_dispatch:
     inputs:
-      force:
-        description: Rebuild the current upstream release even if its image tag exists
+      repair_release:
+        description: Rebuild an incomplete version tag after temporarily making release tags mutable
         required: false
         default: false
         type: boolean
@@ -18,44 +15,8 @@ permissions:
   contents: read
 
 jobs:
-  publish-main:
-    name: Publish main
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    concurrency:
-      group: docker-main
-      cancel-in-progress: true
-    env:
-      IMAGE_NAME: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/goose
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-
-      - name: Build and push main
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ env.IMAGE_NAME }}:main
-          cache-from: type=gha,scope=goose-main
-          cache-to: type=gha,mode=max,scope=goose-main
-
   publish-stable:
     name: Publish latest upstream release
-    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     concurrency:
       group: docker-stable
@@ -100,9 +61,12 @@ jobs:
         run: |
           release_manifest=""
           latest_manifest=""
+          release_platforms="[]"
+          latest_platforms="[]"
+          release_exists=false
 
-          if release_manifest="$(docker buildx imagetools inspect "$IMAGE_NAME:$RELEASE_TAG" --format '{{json .Manifest}}' 2>/dev/null)" &&
-             latest_manifest="$(docker buildx imagetools inspect "$IMAGE_NAME:latest" --format '{{json .Manifest}}' 2>/dev/null)"; then
+          if release_manifest="$(docker buildx imagetools inspect "$IMAGE_NAME:$RELEASE_TAG" --format '{{json .Manifest}}' 2>/dev/null)"; then
+            release_exists=true
             release_platforms="$(jq -cS '
               [.manifests[]?
                 | select(.platform.os == "linux")
@@ -110,6 +74,9 @@ jobs:
                 | {architecture: .platform.architecture, digest: .digest}]
               | sort_by(.architecture)
             ' <<< "$release_manifest")"
+          fi
+
+          if latest_manifest="$(docker buildx imagetools inspect "$IMAGE_NAME:latest" --format '{{json .Manifest}}' 2>/dev/null)"; then
             latest_platforms="$(jq -cS '
               [.manifests[]?
                 | select(.platform.os == "linux")
@@ -119,15 +86,33 @@ jobs:
             ' <<< "$latest_manifest")"
           fi
 
-          if jq -e 'map(.architecture) == ["amd64", "arm64"]' <<< "${release_platforms:-[]}" >/dev/null &&
-             [ "$release_platforms" = "$latest_platforms" ]; then
-            echo "complete=true" >> "$GITHUB_OUTPUT"
+          if [ "$release_exists" != true ]; then
+            release_state=missing
+          elif jq -e 'map(.architecture) == ["amd64", "arm64"]' <<< "$release_platforms" >/dev/null; then
+            release_state=complete
           else
-            echo "complete=false" >> "$GITHUB_OUTPUT"
+            release_state=incomplete
           fi
 
+          latest_current=false
+          if [ "$release_state" = complete ] && [ "$release_platforms" = "$latest_platforms" ]; then
+            latest_current=true
+          fi
+
+          echo "release_state=$release_state" >> "$GITHUB_OUTPUT"
+          echo "latest_current=$latest_current" >> "$GITHUB_OUTPUT"
+
+      - name: Reject incomplete immutable release
+        if: steps.published.outputs.release_state == 'incomplete' && !inputs.repair_release
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          echo "::error::$IMAGE_NAME:$RELEASE_TAG does not contain both required platforms"
+          echo "Temporarily make version tags mutable, then dispatch with repair_release enabled." >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
       - name: Checkout latest upstream release
-        if: steps.published.outputs.complete != 'true' || inputs.force
+        if: steps.published.outputs.release_state == 'missing' || (steps.published.outputs.release_state == 'incomplete' && inputs.repair_release)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: pressly/goose
@@ -136,11 +121,11 @@ jobs:
           persist-credentials: false
 
       - name: Add Docker scaffolding
-        if: steps.published.outputs.complete != 'true' || inputs.force
+        if: steps.published.outputs.release_state == 'missing' || (steps.published.outputs.release_state == 'incomplete' && inputs.repair_release)
         run: cp Dockerfile .dockerignore upstream/
 
       - name: Build and push latest upstream release
-        if: steps.published.outputs.complete != 'true' || inputs.force
+        if: steps.published.outputs.release_state == 'missing' || (steps.published.outputs.release_state == 'incomplete' && inputs.repair_release)
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: ./upstream
@@ -152,8 +137,14 @@ jobs:
           cache-from: type=gha,scope=goose-stable
           cache-to: type=gha,mode=max,scope=goose-stable
 
+      - name: Refresh latest tag
+        if: steps.published.outputs.release_state == 'complete' && steps.published.outputs.latest_current != 'true'
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: docker buildx imagetools create --tag "$IMAGE_NAME:latest" "$IMAGE_NAME:$RELEASE_TAG"
+
       - name: Report complete release image
-        if: steps.published.outputs.complete == 'true' && !inputs.force
+        if: steps.published.outputs.release_state == 'complete' && steps.published.outputs.latest_current == 'true'
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: echo "$IMAGE_NAME:$RELEASE_TAG and latest contain both required platforms" >> "$GITHUB_STEP_SUMMARY"
